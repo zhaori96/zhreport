@@ -1,6 +1,9 @@
 package main
 
 import (
+	"os"
+	"strings"
+
 	"github.com/signintech/gopdf"
 )
 
@@ -29,6 +32,48 @@ type FontFamily struct {
 	BoldItalic string
 }
 
+func FontFamilyFromPath(name string, path string) (*FontFamily, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+
+	fontFamily := &FontFamily{
+		Name: name,
+		Path: path,
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".ttf") {
+			continue
+		}
+
+		fileName := strings.ToLower(entry.Name())
+		if strings.Contains(fileName, "regular") {
+			fontFamily.Regular = fileName
+			continue
+		}
+
+		if strings.Contains(fileName, "bolditalic") {
+			fontFamily.BoldItalic = fileName
+			continue
+		}
+
+		if strings.Contains(fileName, "italic") {
+			fontFamily.Italic = fileName
+			continue
+		}
+
+		if strings.Contains(fileName, "bold") {
+			fontFamily.Bold = fileName
+			continue
+		}
+
+	}
+
+	return fontFamily, nil
+}
+
 func (f *FontFamily) HasRegularStyle() bool {
 	return len(f.Regular) > 0
 }
@@ -43,11 +88,6 @@ func (f *FontFamily) HasBoldStyle() bool {
 
 func (f *FontFamily) HasBoldItalicStyle() bool {
 	return len(f.BoldItalic) > 0
-}
-
-func FontFamilyFromPath(name string, path string) (*FontFamily, error) {
-	//TODO: Create some way to load a font family from a folder.
-	return nil, nil
 }
 
 type Font struct {
