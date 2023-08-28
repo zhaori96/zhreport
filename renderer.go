@@ -56,8 +56,6 @@ func (r *DocumentRenderer) GetY() float64 {
 	return r.engine.GetY()
 }
 
-//TODO: Consider implement a AddFontFamilyFromPath method.
-
 func (r *DocumentRenderer) AddFontFamily(family FontFamily) error {
 	var err error
 
