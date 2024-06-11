@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"path"
 
 	"github.com/signintech/gopdf"
@@ -15,16 +16,24 @@ type rendererState struct {
 }
 
 type RendererOptions struct {
-	PageSize Size
+	PageSize             Size
+	Padding              Margin
+	DefaultSeparatorSize float64
+}
+
+type Element interface {
+	Render(renderer *DocumentRenderer) error
 }
 
 type DocumentRenderer struct {
+	options      RendererOptions
 	engine       gopdf.GoPdf
 	currentState rendererState
 }
 
 func NewDocumentRenderer(options RendererOptions) *DocumentRenderer {
 	renderer := &DocumentRenderer{}
+	renderer.options = options
 	renderer.engine.Start(gopdf.Config{
 		Unit:     gopdf.UnitPT,
 		PageSize: *options.PageSize.ToRect(),
@@ -34,7 +43,7 @@ func NewDocumentRenderer(options RendererOptions) *DocumentRenderer {
 	renderer.SetFont(standardFont)
 
 	renderer.currentState.Font = standardFont
-	renderer.currentState.Offset = Offset{renderer.GetX(), renderer.GetY()}
+	renderer.currentState.Offset = renderer.GetCurrentPosition()
 
 	return renderer
 }
@@ -54,6 +63,22 @@ func (r *DocumentRenderer) GetX() float64 {
 
 func (r *DocumentRenderer) GetY() float64 {
 	return r.engine.GetY()
+}
+
+func (r *DocumentRenderer) SetX(value float64) {
+	r.engine.SetX(value)
+}
+
+func (r *DocumentRenderer) SetY(value float64) {
+	r.engine.SetY(value)
+}
+
+func (r *DocumentRenderer) AddX(value float64) {
+	r.engine.SetX(r.engine.GetX() + value)
+}
+
+func (r *DocumentRenderer) AddY(value float64) {
+	r.engine.SetY(r.engine.GetY() + value)
 }
 
 func (r *DocumentRenderer) AddFontFamily(family FontFamily) error {
@@ -242,50 +267,98 @@ func (r *DocumentRenderer) Text(text string, style *TextStyle) error {
 	}
 
 	if style.Font != nil {
-		//TODO: Check if r.SetFont really need to receive a pointer of Font.
 		r.setFont(*style.Font, true)
 		defer r.SetFont(r.currentState.Font)
 	}
 
-	for _, border := range style.Borders {
-		if border.Side == 0 {
-			continue
-		}
-
-		if border.Side&Left != 0 {
-			r.VerticalLine(style.Boundries.Height, &border.Options)
-		}
-
-		if border.Side&Right != 0 {
-			offset := NewOffset(style.Boundries.Width, r.GetY())
-			r.VerticalLineWithOffset(style.Boundries.Height, offset, &border.Options)
-		}
-
-		if border.Side&Top != 0 {
-			r.HorizontalLine(style.Boundries.Width, &border.Options)
-		}
-
-		if border.Side&Bottom != 0 {
-			offset := NewOffset(r.GetX(), style.Boundries.Height)
-			r.HorizontalLineWithOffset(style.Boundries.Width, offset, &border.Options)
-		}
-
+	//TODO: Implement dynamic boundries based on text size when boundries are not set or set to 0
+	if len(style.Borders) > 0 {
+		r.BoxWithBorders(*style.Boundries, style.Borders...)
 	}
 
-	//TODO: Implement the Padding of style.
+	var texts []string
+	var err error
+	if len(text) > 0 {
+		texts, err = r.SplitText(text, style)
+		if err != nil {
+			return err
+		}
+	}
 
-	r.engine.CellWithOption(
-		&gopdf.Rect{
-			W: style.Boundries.Width,
-			H: style.Boundries.Height,
-		},
-		text,
-		gopdf.CellOption{
-			Align: int(style.Alignment),
-		},
+	position := r.GetCurrentPosition()
+	defer r.engine.SetNewXY(
+		position.Y,
+		position.X+style.Boundries.Width+r.options.DefaultSeparatorSize,
+		0,
 	)
 
+	r.SetY(r.engine.GetY() + style.Padding.Top)
+
+	if !style.Multiline {
+		text := texts[0]
+
+		if len(texts) > 1 && len(style.Overflow) > 0 {
+			text = text[:len(text)-len(style.Overflow)] + style.Overflow
+		}
+
+		r.engine.SetX(position.X + style.Padding.Left)
+		return r.engine.CellWithOption(
+			nil,
+			text,
+			gopdf.CellOption{
+				Align: int(style.Alignment),
+			},
+		)
+	}
+
+	textHeight, _ := r.engine.MeasureCellHeightByText(text)
+	for index, text := range texts {
+		if index > 0 {
+			r.engine.Br(textHeight)
+		}
+
+		r.engine.SetX(position.X + style.Padding.Left)
+		r.engine.CellWithOption(nil, text, gopdf.CellOption{
+			Align: int(style.Alignment),
+		})
+	}
+
 	return nil
+}
+
+func (r *DocumentRenderer) SplitText(text string, style *TextStyle) ([]string, error) {
+	var texts []string
+	var err error
+
+	boundries := style.Boundries.WithPadding(style.Padding)
+
+	if style.WordWrap {
+		texts, err = r.engine.SplitTextWithWordWrap(text, boundries.Width)
+	} else {
+		texts, err = r.engine.SplitText(text, boundries.Width)
+	}
+
+	if len(texts) == 0 {
+		return texts, err
+	}
+
+	textHeight, _ := r.engine.MeasureCellHeightByText(texts[0])
+	limit := int(math.Trunc(boundries.Height / textHeight))
+
+	if limit < len(texts) {
+		texts = texts[:limit]
+		if len(style.Overflow) > 0 {
+			textsLength := len(texts) - 1
+
+			lastText := texts[textsLength]
+			lastTextLength := len(lastText)
+			lastText = lastText[:lastTextLength-len(style.Overflow)] + style.Overflow
+
+			texts[textsLength] = lastText
+		}
+	}
+
+	return texts, err
 }
 
 func (r *DocumentRenderer) Line(size Size, offset Offset, options *LineOptions) {
@@ -302,11 +375,11 @@ func (r *DocumentRenderer) Line(size Size, offset Offset, options *LineOptions) 
 	}
 
 	if size.Width == 0 {
-		size.Width = r.GetX()
+		size.Width = r.engine.GetX()
 	}
 
 	if size.Height == 0 {
-		size.Height = r.GetY()
+		size.Height = r.engine.GetY()
 	}
 
 	r.setLineStyle(options.Style, true)
@@ -329,4 +402,53 @@ func (r *DocumentRenderer) VerticalLine(height float64, options *LineOptions) {
 
 func (r *DocumentRenderer) VerticalLineWithOffset(height float64, offset Offset, options *LineOptions) {
 	r.Line(NewSize(offset.X, height), offset, options)
+}
+
+func (r *DocumentRenderer) Box(size Size, lineOptions *LineOptions) {
+	position := r.GetCurrentPosition()
+
+	if lineOptions == nil {
+		lineOptions = &LineOptions{
+			Style:       LineStyleSolid,
+			StrokeWidth: 0,
+			Color:       &Color{0, 0, 0},
+		}
+	}
+
+	r.VerticalLine(size.Height+position.Y, lineOptions)
+
+	offset := NewOffset(size.Width+position.X, position.Y)
+	r.VerticalLineWithOffset(size.Height+position.Y, offset, lineOptions)
+
+	r.HorizontalLine(size.Width+position.X, lineOptions)
+
+	offset = NewOffset(position.X, size.Height+position.Y)
+	r.HorizontalLineWithOffset(size.Width+position.X, offset, lineOptions)
+}
+
+func (r *DocumentRenderer) BoxWithBorders(size Size, borders ...Border) {
+	position := r.GetCurrentPosition()
+	for _, border := range borders {
+		if border.Side == 0 {
+			continue
+		}
+
+		if border.Side&Left != 0 {
+			r.VerticalLine(size.Height+position.Y, &border.Options)
+		}
+
+		if border.Side&Right != 0 {
+			offset := NewOffset(size.Width+position.X, position.Y)
+			r.VerticalLineWithOffset(size.Height+position.Y, offset, &border.Options)
+		}
+
+		if border.Side&Top != 0 {
+			r.HorizontalLine(size.Width+position.X, &border.Options)
+		}
+
+		if border.Side&Bottom != 0 {
+			offset := NewOffset(position.X, size.Height+position.Y)
+			r.HorizontalLineWithOffset(size.Width+position.X, offset, &border.Options)
+		}
+	}
 }
