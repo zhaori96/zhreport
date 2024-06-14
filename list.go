@@ -13,10 +13,13 @@ type List struct {
 }
 
 func (l List) GetSize() Size {
+	if l.size.IsZero(){
+		return l.computeSize()
+	}
 	return l.size
 }
 
-func (l List) Render(renderer *DocumentRenderer) error {
+func (l *List) Render(renderer *DocumentRenderer) error {
 	if !l.Axis.IsValid() {
 		return ErrInvalidAxis
 	}

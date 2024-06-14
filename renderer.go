@@ -322,8 +322,9 @@ func (r *DocumentRenderer) DrawText(text string, style *TextStyle) error {
 		}
 
 		r.engine.SetX(offset.X + style.Padding.Left)
+		paddedSize := style.Boundries.WithPadding(style.Padding)
 		return r.engine.CellWithOption(
-			nil,
+			paddedSize.ToRect(),
 			text,
 			gopdf.CellOption{
 				Align: int(style.Alignment),
@@ -338,9 +339,14 @@ func (r *DocumentRenderer) DrawText(text string, style *TextStyle) error {
 		}
 
 		r.engine.SetX(offset.X + style.Padding.Left)
-		r.engine.CellWithOption(nil, text, gopdf.CellOption{
-			Align: int(style.Alignment),
-		})
+		paddedSize := style.Boundries.WithPadding(style.Padding)
+		r.engine.CellWithOption(
+			paddedSize.ToRect(),
+			text,
+			gopdf.CellOption{
+				Align: int(style.Alignment),
+			},
+		)
 	}
 
 	return nil
