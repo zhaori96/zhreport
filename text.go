@@ -17,23 +17,9 @@ type Text struct {
 }
 
 func (t Text) Render(renderer *DocumentRenderer) error {
-	return renderer.Text(t.Value, &t.Style)
+	return renderer.DrawText(t.Value, &t.Style)
 }
 
-type Container struct {
-	Size     Size
-	Padding  Margin
-	Borders  []Border
-	Children []Element
-}
-
-func (c Container) Render(renderer *DocumentRenderer) error {
-	renderer.BoxWithBorders(c.Size, c.Borders...)
-	for _, child := range c.Children {
-		if err := child.Render(renderer); err != nil {
-			return err
-		}
-	}
-
-	return nil
+func (t Text) GetSize() Size {
+	return *t.Style.Boundries
 }

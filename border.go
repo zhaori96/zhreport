@@ -3,16 +3,34 @@ package main
 type BorderSide int
 
 const (
-	Left     BorderSide = 1
-	Right    BorderSide = 2
-	Top      BorderSide = 4
-	Bottom   BorderSide = 8
-	AllSides BorderSide = Left | Right | Top | Bottom
+	Left BorderSide = 1 << iota
+	Right
+	Top
+	Bottom
+
+	AllSides = Left | Right | Top | Bottom
 )
+
+func (b BorderSide) IsValid() bool {
+	return b&Left != 0 || b&Right != 0 || b&Top != 0 || b&Bottom != 0
+}
 
 type Border struct {
 	Side    BorderSide
 	Options LineOptions
+}
+
+func NewBorder() Border {
+	return Border{
+		Side: AllSides,
+	}
+}
+
+func NewBorderWithOptions(options LineOptions) Border {
+	return Border{
+		Side:    AllSides,
+		Options: options,
+	}
 }
 
 func NewBorderLeft() Border {

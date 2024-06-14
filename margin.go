@@ -26,6 +26,6 @@ func NewHorizontalMargin(left, right float64) Margin {
 func NewVerticalMargin(top, bottom float64) Margin {
 	return Margin{
 		Top:   top,
-		Right: bottom,
+		Bottom: bottom,
 	}
 }

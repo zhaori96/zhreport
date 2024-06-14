@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"math"
 	"path"
 
@@ -21,10 +22,6 @@ type RendererOptions struct {
 	DefaultSeparatorSize float64
 }
 
-type Element interface {
-	Render(renderer *DocumentRenderer) error
-}
-
 type DocumentRenderer struct {
 	options      RendererOptions
 	engine       gopdf.GoPdf
@@ -43,17 +40,17 @@ func NewDocumentRenderer(options RendererOptions) *DocumentRenderer {
 	renderer.SetFont(standardFont)
 
 	renderer.currentState.Font = standardFont
-	renderer.currentState.Offset = renderer.GetCurrentPosition()
+	renderer.currentState.Offset = renderer.GetCurrentOffset()
 
 	return renderer
 }
 
 func (r *DocumentRenderer) StartNewDocument() {
 	r.engine.AddPage()
-	r.currentState.Offset = r.GetCurrentPosition()
+	r.currentState.Offset = r.GetCurrentOffset()
 }
 
-func (r *DocumentRenderer) GetCurrentPosition() Offset {
+func (r *DocumentRenderer) GetCurrentOffset() Offset {
 	return Offset{X: r.engine.GetX(), Y: r.engine.GetY()}
 }
 
@@ -73,12 +70,41 @@ func (r *DocumentRenderer) SetY(value float64) {
 	r.engine.SetY(value)
 }
 
+func (r *DocumentRenderer) SetXY(x, y float64) {
+	r.engine.SetXY(x, y)
+}
+
+func (r *DocumentRenderer) SetOffset(offset Offset) {
+	r.engine.SetXY(offset.X, offset.Y)
+}
+
 func (r *DocumentRenderer) AddX(value float64) {
 	r.engine.SetX(r.engine.GetX() + value)
 }
 
 func (r *DocumentRenderer) AddY(value float64) {
 	r.engine.SetY(r.engine.GetY() + value)
+}
+
+func (r *DocumentRenderer) AddXY(x, y float64) {
+	r.engine.SetXY(r.engine.GetX()+x, r.engine.GetY()+y)
+}
+
+func (r *DocumentRenderer) AddOffset(offset Offset) {
+	r.AddXY(offset.X, offset.Y)
+}
+
+func (r *DocumentRenderer) AddAxisOffset(offset Offset, axis Axis) {
+	switch axis {
+	case HorizontalAxis:
+		r.AddX(offset.X)
+
+	case VerticalAxis:
+		r.AddY(offset.Y)
+
+	default:
+		panic("DocumentRenderer.AddAxisOffset: invalid axis")
+	}
 }
 
 func (r *DocumentRenderer) AddFontFamily(family FontFamily) error {
@@ -261,7 +287,10 @@ func (r *DocumentRenderer) setLineStyle(style LineStyle, keepCurrentState bool) 
 	}
 }
 
-func (r *DocumentRenderer) Text(text string, style *TextStyle) error {
+func (r *DocumentRenderer) DrawText(text string, style *TextStyle) error {
+	offset := r.GetCurrentOffset()
+	defer r.SetOffset(offset)
+
 	if style == nil {
 		return r.engine.Cell(nil, text)
 	}
@@ -271,9 +300,8 @@ func (r *DocumentRenderer) Text(text string, style *TextStyle) error {
 		defer r.SetFont(r.currentState.Font)
 	}
 
-	//TODO: Implement dynamic boundries based on text size when boundries are not set or set to 0
 	if len(style.Borders) > 0 {
-		r.BoxWithBorders(*style.Boundries, style.Borders...)
+		r.DrawBoxWithBorders(*style.Boundries, style.Borders...)
 	}
 
 	var texts []string
@@ -285,15 +313,7 @@ func (r *DocumentRenderer) Text(text string, style *TextStyle) error {
 		}
 	}
 
-	position := r.GetCurrentPosition()
-	defer r.engine.SetNewXY(
-		position.Y,
-		position.X+style.Boundries.Width+r.options.DefaultSeparatorSize,
-		0,
-	)
-
-	r.SetY(r.engine.GetY() + style.Padding.Top)
-
+	r.engine.SetY(offset.Y + style.Padding.Top)
 	if !style.Multiline {
 		text := texts[0]
 
@@ -301,7 +321,7 @@ func (r *DocumentRenderer) Text(text string, style *TextStyle) error {
 			text = text[:len(text)-len(style.Overflow)] + style.Overflow
 		}
 
-		r.engine.SetX(position.X + style.Padding.Left)
+		r.engine.SetX(offset.X + style.Padding.Left)
 		return r.engine.CellWithOption(
 			nil,
 			text,
@@ -317,7 +337,7 @@ func (r *DocumentRenderer) Text(text string, style *TextStyle) error {
 			r.engine.Br(textHeight)
 		}
 
-		r.engine.SetX(position.X + style.Padding.Left)
+		r.engine.SetX(offset.X + style.Padding.Left)
 		r.engine.CellWithOption(nil, text, gopdf.CellOption{
 			Align: int(style.Alignment),
 		})
@@ -326,7 +346,10 @@ func (r *DocumentRenderer) Text(text string, style *TextStyle) error {
 	return nil
 }
 
-func (r *DocumentRenderer) SplitText(text string, style *TextStyle) ([]string, error) {
+func (r *DocumentRenderer) SplitText(
+	text string,
+	style *TextStyle,
+) ([]string, error) {
 	var texts []string
 	var err error
 
@@ -361,14 +384,23 @@ func (r *DocumentRenderer) SplitText(text string, style *TextStyle) ([]string, e
 	return texts, err
 }
 
-func (r *DocumentRenderer) Line(size Size, offset Offset, options *LineOptions) {
+func (r *DocumentRenderer) DrawLine(
+	size Size,
+	offset Offset,
+	options *LineOptions,
+) error {
+	if size.IsZero() {
+		return ErrInvalidSize
+	}
+
 	if options != nil {
 		if options.StrokeWidth != r.currentState.StrokeWidth {
 			r.setStrokeWidth(options.StrokeWidth, true)
 			defer r.SetStrokeWidth(r.currentState.StrokeWidth)
 		}
 
-		if !r.currentState.StrokeColor.IsEqual(*options.Color) {
+		if options.Color != nil &&
+			!r.currentState.StrokeColor.IsEqual(*options.Color) {
 			r.setStrokeColor(*options.Color, true)
 			defer r.SetStrokeColor(r.currentState.StrokeColor)
 		}
@@ -386,27 +418,46 @@ func (r *DocumentRenderer) Line(size Size, offset Offset, options *LineOptions) 
 	defer r.SetLineStyle(r.currentState.LineStyle)
 
 	r.engine.Line(offset.X, offset.Y, size.Width, size.Height)
+	return nil
 }
 
-func (r *DocumentRenderer) HorizontalLine(width float64, options *LineOptions) {
-	r.Line(NewSize(width, 0), r.GetCurrentPosition(), options)
+func (r *DocumentRenderer) DrawHorizontalLine(
+	width float64,
+	options *LineOptions,
+) error {
+	return r.DrawLine(NewSize(width, 0), r.GetCurrentOffset(), options)
 }
 
-func (r *DocumentRenderer) HorizontalLineWithOffset(width float64, offset Offset, options *LineOptions) {
-	r.Line(NewSize(width, offset.Y), offset, options)
+func (r *DocumentRenderer) DrawHorizontalLineWithOffset(
+	width float64,
+	offset Offset,
+	options *LineOptions,
+) error {
+	return r.DrawLine(NewSize(width, offset.Y), offset, options)
 }
 
-func (r *DocumentRenderer) VerticalLine(height float64, options *LineOptions) {
-	r.Line(NewSize(0, height), r.GetCurrentPosition(), options)
+func (r *DocumentRenderer) DrawVerticalLine(
+	height float64,
+	options *LineOptions,
+) error {
+	return r.DrawLine(NewSize(0, height), r.GetCurrentOffset(), options)
 }
 
-func (r *DocumentRenderer) VerticalLineWithOffset(height float64, offset Offset, options *LineOptions) {
-	r.Line(NewSize(offset.X, height), offset, options)
+func (r *DocumentRenderer) DrawVerticalLineWithOffset(
+	height float64,
+	offset Offset,
+	options *LineOptions,
+) error {
+	return r.DrawLine(NewSize(offset.X, height), offset, options)
 }
 
-func (r *DocumentRenderer) Box(size Size, lineOptions *LineOptions) {
-	position := r.GetCurrentPosition()
+func (r *DocumentRenderer) DrawBox(size Size, lineOptions *LineOptions) error {
+	if size.IsZero() {
+		err := errors.New("DrawBox can't have a zero Size")
+		return ErrInvalidSize.Wrap(err)
+	}
 
+	currentOffset := r.GetCurrentOffset()
 	if lineOptions == nil {
 		lineOptions = &LineOptions{
 			Style:       LineStyleSolid,
@@ -415,40 +466,68 @@ func (r *DocumentRenderer) Box(size Size, lineOptions *LineOptions) {
 		}
 	}
 
-	r.VerticalLine(size.Height+position.Y, lineOptions)
+	r.DrawVerticalLine(size.Height+currentOffset.Y, lineOptions)
 
-	offset := NewOffset(size.Width+position.X, position.Y)
-	r.VerticalLineWithOffset(size.Height+position.Y, offset, lineOptions)
+	offset := NewOffset(size.Width+currentOffset.X, currentOffset.Y)
+	r.DrawVerticalLineWithOffset(
+		size.Height+currentOffset.Y,
+		offset,
+		lineOptions,
+	)
 
-	r.HorizontalLine(size.Width+position.X, lineOptions)
+	r.DrawHorizontalLine(size.Width+currentOffset.X, lineOptions)
 
-	offset = NewOffset(position.X, size.Height+position.Y)
-	r.HorizontalLineWithOffset(size.Width+position.X, offset, lineOptions)
+	offset = NewOffset(currentOffset.X, size.Height+currentOffset.Y)
+	r.DrawHorizontalLineWithOffset(
+		size.Width+currentOffset.X,
+		offset,
+		lineOptions,
+	)
+
+	return nil
 }
 
-func (r *DocumentRenderer) BoxWithBorders(size Size, borders ...Border) {
-	position := r.GetCurrentPosition()
+func (r *DocumentRenderer) DrawBoxWithBorders(
+	size Size,
+	borders ...Border,
+) error {
+	if size.IsZero() {
+		err := errors.New("BoxWithBorders can't have a zero Size")
+		return ErrInvalidSize.Wrap(err)
+	}
+
+	currentOffset := r.GetCurrentOffset()
 	for _, border := range borders {
 		if border.Side == 0 {
 			continue
 		}
 
 		if border.Side&Left != 0 {
-			r.VerticalLine(size.Height+position.Y, &border.Options)
+			r.DrawVerticalLine(size.Height+currentOffset.Y, &border.Options)
 		}
 
 		if border.Side&Right != 0 {
-			offset := NewOffset(size.Width+position.X, position.Y)
-			r.VerticalLineWithOffset(size.Height+position.Y, offset, &border.Options)
+			offset := NewOffset(size.Width+currentOffset.X, currentOffset.Y)
+			r.DrawVerticalLineWithOffset(
+				size.Height+currentOffset.Y,
+				offset,
+				&border.Options,
+			)
 		}
 
 		if border.Side&Top != 0 {
-			r.HorizontalLine(size.Width+position.X, &border.Options)
+			r.DrawHorizontalLine(size.Width+currentOffset.X, &border.Options)
 		}
 
 		if border.Side&Bottom != 0 {
-			offset := NewOffset(position.X, size.Height+position.Y)
-			r.HorizontalLineWithOffset(size.Width+position.X, offset, &border.Options)
+			offset := NewOffset(currentOffset.X, size.Height+currentOffset.Y)
+			r.DrawHorizontalLineWithOffset(
+				size.Width+currentOffset.X,
+				offset,
+				&border.Options,
+			)
 		}
 	}
+
+	return nil
 }

@@ -1,6 +1,10 @@
 package main
 
-import "github.com/signintech/gopdf"
+import (
+	"fmt"
+
+	"github.com/signintech/gopdf"
+)
 
 type Size struct {
 	Width  float64
@@ -23,11 +27,19 @@ func NewSizeWithPadding(width, height float64, padding Margin) Size {
 	return size.WithPadding(padding)
 }
 
+func (s Size) IsZero() bool {
+	return s.Width == 0 && s.Height == 0
+}
+
 func (s *Size) ToRect() *gopdf.Rect {
 	return &gopdf.Rect{
 		W: s.Width,
 		H: s.Height,
 	}
+}
+
+func (s Size) ToOffset() Offset {
+	return Offset{X: s.Width, Y: s.Height}
 }
 
 func (s Size) WithPadding(padding Margin) Size {
@@ -48,5 +60,16 @@ func (s Size) WithVerticalPadding(top float64, bottom float64) Size {
 	return Size{
 		Width:  s.Width,
 		Height: s.Height - top - bottom,
+	}
+}
+
+func (s Size) FromAxis(axis Axis) float64 {
+	switch axis {
+	case HorizontalAxis:
+		return s.Width
+	case VerticalAxis:
+		return s.Height
+	default:
+		panic(fmt.Errorf("Size.FromAxis: %w", ErrInvalidAxis))
 	}
 }

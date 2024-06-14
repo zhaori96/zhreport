@@ -1,7 +1,5 @@
 package main
 
-type PageSize int
-
 var (
 	PageSizeLetter      Size = Size{Width: 612, Height: 792}
 	PageSizeLetterSmall Size = Size{Width: 612, Height: 792}
